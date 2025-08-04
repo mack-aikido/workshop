@@ -1,0 +1,109 @@
+name: TruffleHog - Create Product and engagement 
+
+on:
+  push:
+    branches:
+      - '**'   # ✅ Trigger on all branches
+  workflow_dispatch:  # ✅ Manual trigger
+
+jobs:
+  defectdojo-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout Code
+      - name: Checkout code repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # ✅ Full history required for Git scan
+
+      # 2. Validate Secrets (Fail early if missing)
+      - name: Validate Secrets
+        run: |
+          if [ -z "${{ secrets.DEFECTDOJO_URL }}" ]; then
+            echo "❌ DEFECTDOJO_URL is missing!"
+            exit 1
+          fi
+          if [ -z "${{ secrets.DEFECTDOJO_TOKEN }}" ]; then
+            echo "❌ DEFECTDOJO_TOKEN is missing!"
+            exit 1
+          fi
+          echo "✅ Secrets present."
+
+      # 3. Test API Connectivity (Insecure SSL)
+      - name: Test API Connectivity (Insecure SSL)
+        run: |
+          API_URL="${{ secrets.DEFECTDOJO_URL }}/api/v2/system_settings/"
+          echo "Testing API URL (insecure SSL): $API_URL"
+          curl -vk $API_URL \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json"
+
+      # 4. Create Reports Folder
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      # 5. Run TruffleHog Git Scan (Full Commit History)
+      - name: Run TruffleHog Git Scan
+        run: |
+          echo "Running TruffleHog Git scan (full history)..."
+          docker run --rm -v $PWD:/pwd ghcr.io/trufflesecurity/trufflehog:latest git file:///pwd --json > reports/trufflehog-raw.json || true
+
+      # 6. Normalize TruffleHog JSON Output (NDJSON → JSON Array)
+    #  - name: Normalize TruffleHog JSON Output
+     #   run: |
+      #    echo "Converting TruffleHog NDJSON to JSON array..."
+       #   jq -s '.' reports/trufflehog-raw.json > reports/trufflehog-scan-report.json
+
+      # 7. Create Product in DefectDojo
+      - name: Create Product in DefectDojo
+        run: |
+          PRODUCT_NAME="TruffleHog Scan"
+          PROD_TYPE_ID=1   # ✅ Adjust based on your DefectDojo Product Types
+          echo "Creating product '$PRODUCT_NAME'..."
+          curl -vk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/products/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"${PRODUCT_NAME}\",
+              \"description\": \"Automated product for TruffleHog scans.\",
+              \"prod_type\": ${PROD_TYPE_ID}
+            }"
+
+      # 8. Create Engagement in DefectDojo
+      - name: Create Engagement in DefectDojo
+        run: |
+          ENGAGEMENT_NAME="TruffleHog CI/CD Scans"
+          PRODUCT_ID=$(curl -sk -X GET "${{ secrets.DEFECTDOJO_URL }}/api/v2/products/?name=TruffleHog%20Scan" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" | jq '.results[0].id')
+
+          TODAY=$(date +%Y-%m-%d)
+
+          echo "Creating engagement '$ENGAGEMENT_NAME' under product ID $PRODUCT_ID..."
+          curl -vk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/engagements/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"${ENGAGEMENT_NAME}\",
+              \"description\": \"Engagement for TruffleHog CI/CD secret scans.\",
+              \"product\": ${PRODUCT_ID},
+              \"status\": \"In Progress\",
+              \"target_start\": \"${TODAY}\",
+              \"target_end\": \"${TODAY}\"
+            }"
+
+      # 9. Import TruffleHog Scan to DefectDojo
+      - name: Upload TruffleHog Report to DefectDojo
+        run: |
+          echo "Uploading TruffleHog scan report to DefectDojo..."
+          curl -vk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json" \
+            -F "scan_type=Trufflehog Scan" \
+            -F "product_name=TruffleHog Scan" \
+            -F "engagement_name=TruffleHog CI/CD Scans" \
+            -F "file=@reports/trufflehog-raw.json"
+
+      # 10. Confirm Completion
+      - name: Show Confirmation
+        run: echo "✅ TruffleHog scan uploaded, product & engagement created successfully."
