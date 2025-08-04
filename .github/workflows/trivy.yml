@@ -1,0 +1,68 @@
+name: Trivy Defect Dojo 
+
+on:
+  push:
+    branches:
+      - '**'        # ✅ Trigger on all branches
+  workflow_dispatch:  # ✅ Allow manual runs from Actions UI
+
+jobs:
+  defectdojo-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout Code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Validate Required Secrets
+      - name: Validate Secrets
+        run: |
+          if [ -z "${{ secrets.DEFECTDOJO_URL }}" ]; then
+            echo "❌ DEFECTDOJO_URL is missing!"
+            exit 1
+          fi
+          if [ -z "${{ secrets.DEFECTDOJO_TOKEN }}" ]; then
+            echo "❌ DEFECTDOJO_TOKEN is missing!"
+            exit 1
+          fi
+          echo "✅ Secrets validated."
+
+      # 3. Test DefectDojo API Connectivity (SSL verified)
+      - name: Test DefectDojo API
+        run: |
+          echo "Testing API endpoint: ${{ secrets.DEFECTDOJO_URL }}/api/v2/system_settings/"
+          curl -s -o /dev/null -w "%{http_code}\n" \
+            "${{ secrets.DEFECTDOJO_URL }}/api/v2/system_settings/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json"
+
+      # 4. Create Reports Folder
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      # 5. Run Trivy Scan (official action)
+      - name: Run Trivy Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: json
+          output: reports/trivy-scan-report.json
+
+      # 6. Upload Report to DefectDojo
+      - name: Upload Scan Report to DefectDojo
+        run: |
+          echo "Uploading scan report to DefectDojo..."
+          curl -s -o response.json -w "%{http_code}\n" -X POST \
+            "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json" \
+            -F "scan_type=Trivy Scan" \
+            -F "engagement=1" \
+            -F "file=@reports/trivy-scan-report.json"
+
+      # 7. Show API Response
+      - name: Show API Response
+        run: |
+          echo "✅ DefectDojo API response:"
+          cat response.json
