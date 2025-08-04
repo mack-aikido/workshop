@@ -3,8 +3,8 @@ name: TruffleHog - Create Product and engagement
 on:
   push:
     branches:
-      - '**'   # ✅ Trigger on all branches
-  workflow_dispatch:  # ✅ Manual trigger
+      - '**'   # Trigger on all branches
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   defectdojo-upload:
@@ -15,7 +15,7 @@ jobs:
       - name: Checkout code repository
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0  # ✅ Full history required for Git scan
+          fetch-depth: 0  # Full history required for Git scan
 
       # 2. Validate Secrets (Fail early if missing)
       - name: Validate Secrets
@@ -59,7 +59,7 @@ jobs:
       - name: Create Product in DefectDojo
         run: |
           PRODUCT_NAME="TruffleHog Scan"
-          PROD_TYPE_ID=1   # ✅ Adjust based on your DefectDojo Product Types
+          PROD_TYPE_ID=1   # Adjust based on your DefectDojo Product Types
           echo "Creating product '$PRODUCT_NAME'..."
           curl -vk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/products/" \
             -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
