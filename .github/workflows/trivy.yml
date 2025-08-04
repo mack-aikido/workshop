@@ -1,0 +1,103 @@
+name: Trivy - Create Product and Engagement
+
+on:
+  push:
+    branches:
+      - '**'         # ✅ Trigger on all branches
+  workflow_dispatch:  # ✅ Manual trigger
+
+jobs:
+  defectdojo-init:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout Code Repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Validate Secrets
+      - name: Validate Secrets
+        run: |
+          if [ -z "${{ secrets.DEFECTDOJO_URL }}" ]; then
+            echo "❌ DEFECTDOJO_URL is missing!"
+            exit 1
+          fi
+          if [ -z "${{ secrets.DEFECTDOJO_TOKEN }}" ]; then
+            echo "❌ DEFECTDOJO_TOKEN is missing!"
+            exit 1
+          fi
+          echo "✅ Secrets validated."
+
+      # 3. Test API Connectivity (Insecure SSL allowed for flexibility)
+      - name: Test DefectDojo API Connectivity
+        run: |
+          API_URL="${{ secrets.DEFECTDOJO_URL }}/api/v2/system_settings/"
+          echo "Testing API endpoint: $API_URL"
+          curl -vk $API_URL \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json"
+
+      # 4. Create Reports Folder
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      # 5. Run Trivy Scan
+      - name: Run Trivy Scan (Filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: json
+          output: reports/trivy-scan-report.json
+
+      # 6. Create Product in DefectDojo
+      - name: Create Product in DefectDojo
+        run: |
+          PRODUCT_NAME="Trivy Scan"
+          PROD_TYPE_ID=1   # ✅ Adjust to match your DefectDojo Product Type ID
+          echo "Creating product '$PRODUCT_NAME'..."
+          curl -vk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/products/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"${PRODUCT_NAME}\",
+              \"description\": \"Automated product for Trivy vulnerability scans.\",
+              \"prod_type\": ${PROD_TYPE_ID}
+            }"
+
+      # 7. Create Engagement in DefectDojo
+      - name: Create Engagement in DefectDojo
+        run: |
+          ENGAGEMENT_NAME="Trivy CI/CD Scans"
+          PRODUCT_ID=$(curl -sk -X GET "${{ secrets.DEFECTDOJO_URL }}/api/v2/products/?name=Trivy%20Scan" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" | jq '.results[0].id')
+
+          TODAY=$(date +%Y-%m-%d)
+
+          echo "Creating engagement '$ENGAGEMENT_NAME' under product ID $PRODUCT_ID..."
+          curl -vk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/engagements/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"${ENGAGEMENT_NAME}\",
+              \"description\": \"Engagement for Trivy CI/CD vulnerability scans.\",
+              \"product\": ${PRODUCT_ID},
+              \"status\": \"In Progress\",
+              \"target_start\": \"${TODAY}\",
+              \"target_end\": \"${TODAY}\"
+            }"
+
+      # 8. Import Trivy Scan Report to DefectDojo
+      - name: Import Trivy Scan Report to DefectDojo
+        run: |
+          echo "Uploading Trivy scan report to DefectDojo..."
+          curl -vk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json" \
+            -F "scan_type=Trivy Scan" \
+            -F "product_name=Trivy Scan" \
+            -F "engagement_name=Trivy CI/CD Scans" \
+            -F "file=@reports/trivy-scan-report.json"
+
+      # 9. Confirmation
+      - name: Confirm Completion
+        run: echo "✅ Trivy product, engagement, and scan report created successfully in DefectDojo."
