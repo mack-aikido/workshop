@@ -1,0 +1,95 @@
+name: TruffleHog - Create Product and Engagement
+
+on:
+  workflow_dispatch:
+
+jobs:
+  defectdojo-init:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout Code
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      # 2. Set Shared Variables
+      - name: Set Variables
+        run: |
+          echo "PRODUCT_NAME=TruffleHog Scan" >> $GITHUB_ENV
+          echo "ENGAGEMENT_NAME=TruffleHog CI/CD Scans" >> $GITHUB_ENV
+
+      # 3. Validate Secrets
+      - name: Validate Secrets
+        run: |
+          if [ -z "${{ secrets.DEFECTDOJO_URL }}" ] || [ -z "${{ secrets.DEFECTDOJO_TOKEN }}" ]; then
+            echo "❌ Missing required secrets"
+            exit 1
+          fi
+          echo "✅ Secrets validated."
+
+      # 4. Test DefectDojo API Connectivity
+      - name: Test API Connectivity
+        run: |
+          curl -sk "${{ secrets.DEFECTDOJO_URL }}/api/v2/system_settings/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json"
+
+      # 5. Create Reports Folder
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      # 6. Run TruffleHog Git Scan
+      - name: Run TruffleHog Git Scan
+        run: |
+          docker run --rm -v $PWD:/pwd ghcr.io/trufflesecurity/trufflehog:latest git file:///pwd --json > reports/trufflehog-raw.json || true
+
+      # 7. Create Product in DefectDojo
+      - name: Create Product
+        run: |
+          curl -sk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/products/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"${PRODUCT_NAME}\",
+              \"description\": \"Automated product for TruffleHog scans.\",
+              \"prod_type\": 1
+            }" || true
+
+      # 8. Retrieve Product ID
+      - name: Retrieve Product ID
+        id: get-product
+        run: |
+          PRODUCT_ID=$(curl -sk "${{ secrets.DEFECTDOJO_URL }}/api/v2/products/?name=${PRODUCT_NAME// /%20}" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" | jq '.results[0].id')
+          echo "product_id=$PRODUCT_ID" >> $GITHUB_OUTPUT
+
+      # 9. Create Engagement in DefectDojo
+      - name: Create Engagement
+        run: |
+          TODAY=$(date +%Y-%m-%d)
+          curl -sk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/engagements/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"${ENGAGEMENT_NAME}\",
+              \"description\": \"Engagement for TruffleHog CI/CD secret scans.\",
+              \"product\": ${{ steps.get-product.outputs.product_id }},
+              \"status\": \"In Progress\",
+              \"target_start\": \"${TODAY}\",
+              \"target_end\": \"${TODAY}\"
+            }" || true
+
+      # 10. Upload Initial Scan Report
+      - name: Upload TruffleHog Report
+        run: |
+          curl -sk -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+            -H "accept: application/json" \
+            -F "scan_type=Trufflehog Scan" \
+            -F "product_name=${PRODUCT_NAME}" \
+            -F "engagement_name=${ENGAGEMENT_NAME}" \
+            -F "file=@reports/trufflehog-raw.json"
+
+      # 11. Conf
